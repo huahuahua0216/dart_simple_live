@@ -21,6 +21,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.ref }}
           fetch-depth: 0
 
       # ================= Android 签名 =================
@@ -127,6 +128,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
+          token: ${{ secrets.TOKEN }}
           name: "${{ fromJson(steps.version.outputs.content).version }}"
           body: "${{ fromJson(steps.version.outputs.content).version_desc }}"
           prerelease: ${{ fromJson(steps.version.outputs.content).prerelease }}
@@ -151,6 +153,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.ref }}
           fetch-depth: 0
 
       - name: Setup Flutter
@@ -184,7 +187,8 @@ jobs:
       - name: Upload Linux Assets to Release
         uses: softprops/action-gh-release@v1
         with:
-          文件: |
+          token: ${{ secrets.TOKEN }}
+          files: |
             simple_live_app/build/dist/*/*.deb
             simple_live_app/build/dist/*/*.zip
 
@@ -201,6 +205,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.ref }}
           fetch-depth: 0
 
       - name: Setup Flutter
@@ -228,6 +233,7 @@ jobs:
       - name: Upload Windows Assets to Release
         uses: softprops/action-gh-release@v1
         with:
+          token: ${{ secrets.TOKEN }}
           files: |
             simple_live_app/build/dist/*/*.msix
             simple_live_app/build/dist/*/*.zip
