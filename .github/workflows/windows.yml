@@ -16,25 +16,21 @@ jobs:
         with:
           channel: stable
 
-      # 正确进入子目录
-      - name: 进入 Flutter 项目目录
-        run: cd simple_live_app && dir   # Windows 下看一下确认
-
       - name: 获取依赖
         run: flutter pub get
-        working-directory: simple_live_app
+        working-directory: ./simple_live_app
 
-      - name: 编译 Windows Release
+      - name: 编译 Windows
         run: flutter build windows --release
-        working-directory: simple_live_app
+        working-directory: ./simple_live_app
 
-      - name: 打包成 zip
+      - name: 打包成zip
         run: |
-          cd simple_live_app/build/windows/x64/runner/Release
-          powershell Compress-Archive -Path * -DestinationPath "..\..\..\..\..\小雅直播_Windows_${{ github.sha ::8 }}.zip"
+          cd simple_live_app\build\windows\x64\runner\Release
+          powershell Compress-Archive -Path * -DestinationPath "..\..\..\..\..\小雅直播_${{ github.run_id }}.zip" -Force
 
-      - name: 上传可下载文件
+      - name: 上传供下载
         uses: actions/upload-artifact@v4
         with:
-          name: 小雅直播_Windows_最新版
-          path: 小雅直播_Windows_*.zip
+          name: 小雅直播_Windows_可直接运行
+          path: 小雅直播_*.zip
