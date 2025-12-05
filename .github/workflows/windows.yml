@@ -24,13 +24,31 @@ jobs:
         run: flutter build windows --release
         working-directory: ./simple_live_app
 
-      - name: 打包到根目录
+      - name: 下载 VC++ Redist 并提取 DLL
         run: |
-          cd simple_live_app\build\windows\x64\runner\Release
-          powershell Compress-Archive -Path * -DestinationPath "$env:GITHUB_WORKSPACE\XiaoYa_Live_Windows_Latest.zip" -Force
+          Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile "vc_redist.x64.exe"
+          Start-Process -FilePath "vc_redist.x64.exe" -ArgumentList "/extract /passive /norestart /dir=.\redist" -Wait
+          Copy-Item -Path "redist\MSVC\v142\*" -Destination "simple_live_app\build\windows\x64\runner\Release" -Recurse -Force
 
-      - name: 上传
+      - name: 下载 Inno Setup 并打包单exe
+        run: |
+          Invoke-WebRequest -Uri "https://jrsoftware.org/files/is5-setup.exe" -OutFile "innosetup.exe"
+          Start-Process -FilePath "innosetup.exe" -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART" -Wait
+          $iss = @"
+          [Setup]
+          AppName=小雅直播
+          AppVersion=1.0.0
+          DefaultDirName={autopf}\小雅直播
+          OutputBaseFilename=小雅直播_单文件版
+          OutputDir=.
+          [Files]
+          Source: "simple_live_app\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
+          "@
+          Set-Content -Path "setup.iss" -Value $iss
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "setup.iss"
+
+      - name: 上传单exe
         uses: actions/upload-artifact@v4
         with:
-          name: XiaoYa_Live_Windows_Latest
-          path: XiaoYa_Live_Windows_Latest.zip
+          name: XiaoYa_Live_Single_EXE
+          path: 小雅直播_单文件版.exe
