@@ -1,0 +1,27 @@
+name: Build Windows EXE
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - run: flutter pub get
+      - run: flutter build windows --release
+
+      - name: Zip Release
+        run: |
+          cd build/windows/x64/runner/Release
+          7z a -tzip "../../../小雅直播_Windows_${{ github.ref_name }}.zip" *
+      
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: 小雅直播_Windows_${{ github.ref_name }}.zip
