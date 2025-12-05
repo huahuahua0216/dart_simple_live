@@ -24,14 +24,13 @@ jobs:
         run: flutter build windows --release
         working-directory: ./simple_live_app
 
-      # 关键修复：直接在仓库根目录生成 zip
-      - name: 打包并放回根目录
+      - name: 打包到根目录
         run: |
           cd simple_live_app\build\windows\x64\runner\Release
-          powershell Compress-Archive -Path * -DestinationPath "$env:GITHUB_WORKSPACE\小雅直播_Windows_最新版.zip" -Force
+          powershell Compress-Archive -Path * -DestinationPath "$env:GITHUB_WORKSPACE\XiaoYa_Live_Windows_Latest.zip" -Force
 
-      - name: 上传 exe 包
+      - name: 上传
         uses: actions/upload-artifact@v4
         with:
-          name: 小雅直播_Windows_最新版_可直接运行
-          path: 小雅直播_Windows_最新版.zip
+          name: XiaoYa_Live_Windows_Latest
+          path: XiaoYa_Live_Windows_Latest.zip
