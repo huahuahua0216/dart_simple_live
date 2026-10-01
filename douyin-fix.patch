@@ -99,7 +99,7 @@ index 7ea0fed..237f591 100644
                    ? const Icon(Icons.delete_outline)
                    : const Icon(Icons.chevron_right),
 diff --git a/simple_live_app/lib/modules/search/douyin/douyin_search_controller.dart b/simple_live_app/lib/modules/search/douyin/douyin_search_controller.dart
-index 954e0a2..f0ca4c4 100644
+index 954e0a2..1099597 100644
 --- a/simple_live_app/lib/modules/search/douyin/douyin_search_controller.dart
 +++ b/simple_live_app/lib/modules/search/douyin/douyin_search_controller.dart
 @@ -1,4 +1,5 @@
@@ -162,7 +162,7 @@ index 954e0a2..f0ca4c4 100644
    String keyword = "";
  
    /// 搜索模式，0=直播间，1=主播
-@@ -27,44 +58,128 @@ class DouyinSearchController extends BaseController {
+@@ -27,44 +58,135 @@ class DouyinSearchController extends BaseController {
      this.site,
    );
  
@@ -202,10 +202,16 @@ index 954e0a2..f0ca4c4 100644
 +    if (Platform.isMacOS || Platform.isAndroid || Platform.isIOS) {
 +      pageError.value = false;
 +      if (keyword.isNotEmpty) _beginWaiting();
++      // Bind responses to this document, even if Douyin rewrites its URL.
++      await webViewController!.removeUserScriptsByGroupName(groupName: 'douyinSearchCapture');
++      await webViewController!.addUserScript(userScript: UserScript(
++        groupName: 'douyinSearchCapture',
++        source: douyinSearchCaptureScript.replaceAll('__SIMPLE_LIVE_GENERATION__', '$_generation'),
++        injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
++      ));
 +      await webViewController!.loadUrl(
          urlRequest: URLRequest(
--          url: WebUri(searchUrl),
-+          url: WebUri('$searchUrl${searchUrl.contains('?') ? '&' : '?'}simple_live_generation=$_generation'),
+           url: WebUri(searchUrl),
          ),
        );
 +      _loadedUrl = searchUrl;
@@ -230,7 +236,7 @@ index 954e0a2..f0ca4c4 100644
 +    final uri = Uri.tryParse(payload['url']?.toString() ?? '');
 +    if (uri == null || uri.host != 'www.douyin.com' ||
 +        uri.path != '/aweme/v1/web/live/search/' ||
-+        uri.queryParameters['keyword'] != keyword || searchMode.value != 0 ||
++        uri.queryParameters['keyword']?.trim().toLowerCase() != keyword.trim().toLowerCase() || searchMode.value != 0 ||
 +        payload['generation']?.toString() != '$_generation') return;
 +    final offset = int.tryParse(uri.queryParameters['offset'] ?? '0') ?? 0;
 +    if (_offsets.contains(offset)) return;
@@ -314,13 +320,12 @@ index 954e0a2..f0ca4c4 100644
  
      return false;
 diff --git a/simple_live_app/lib/modules/search/douyin/douyin_search_view.dart b/simple_live_app/lib/modules/search/douyin/douyin_search_view.dart
-index 67d1593..07cb732 100644
+index 67d1593..22fb636 100644
 --- a/simple_live_app/lib/modules/search/douyin/douyin_search_view.dart
 +++ b/simple_live_app/lib/modules/search/douyin/douyin_search_view.dart
-@@ -1,14 +1,13 @@
+@@ -1,14 +1,11 @@
 -import 'dart:io';
 -
-+import 'dart:collection';
  import 'package:flutter/material.dart';
  import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 -
@@ -333,11 +338,10 @@ index 67d1593..07cb732 100644
 +import 'package:simple_live_app/widgets/live_room_card.dart';
 +import 'package:simple_live_app/widgets/page_grid_view.dart';
 +import 'douyin_search_controller.dart';
-+import 'douyin_search_results.dart';
  
  class DouyinSearchView extends StatelessWidget {
    const DouyinSearchView({Key? key}) : super(key: key);
-@@ -16,75 +15,61 @@ class DouyinSearchView extends StatelessWidget {
+@@ -16,75 +13,57 @@ class DouyinSearchView extends StatelessWidget {
  
    @override
    Widget build(BuildContext context) {
@@ -379,10 +383,6 @@ index 67d1593..07cb732 100644
 +        child: Opacity(
 +          opacity: controller.showVerification.value ? 1 : 0,
 +          child: InAppWebView(
-+            initialUserScripts: UnmodifiableListView<UserScript>([
-+              UserScript(source: douyinSearchCaptureScript,
-+                  injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START),
-+            ]),
 +            onWebViewCreated: controller.onWebViewCreated,
 +            initialSettings: InAppWebViewSettings(
 +              userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15',
@@ -979,7 +979,7 @@ index 0000000..5cfe71d
 +}
 diff --git a/simple_live_app/test/douyin_search_test.dart b/simple_live_app/test/douyin_search_test.dart
 new file mode 100644
-index 0000000..ad12dc1
+index 0000000..d6d1bfd
 --- /dev/null
 +++ b/simple_live_app/test/douyin_search_test.dart
 @@ -0,0 +1,76 @@
@@ -1031,7 +1031,7 @@ index 0000000..ad12dc1
 +    controller.acceptResults(payload(0, [room('999')], generation: '0'));
 +    controller.acceptResults(payload(0, [room('999')], keyword: 'other'));
 +    expect(controller.list, isEmpty);
-+    controller.acceptResults(payload(0, [room('123')]));
++    controller.acceptResults(payload(0, [room('123')], keyword: 'nba'));
 +    controller.acceptResults(payload(0, [room('999')]));
 +    controller.acceptResults(payload(10, [room('123'), room('456')]));
 +    expect(controller.list.map((item) => item.roomId), ['123', '456']);
@@ -1061,7 +1061,7 @@ index 0000000..ad12dc1
 +}
 diff --git a/simple_live_app/lib/modules/search/douyin/douyin_search_results.dart b/simple_live_app/lib/modules/search/douyin/douyin_search_results.dart
 new file mode 100644
-index 0000000..bb7b8e6
+index 0000000..195765f
 --- /dev/null
 +++ b/simple_live_app/lib/modules/search/douyin/douyin_search_results.dart
 @@ -0,0 +1,100 @@
@@ -1113,7 +1113,7 @@ index 0000000..bb7b8e6
 +
 +const douyinSearchCaptureScript = r'''
 +(() => {
-+  const generation = new URL(location.href).searchParams.get('simple_live_generation');
++  const generation = '__SIMPLE_LIVE_GENERATION__';
 +  let nextUrl = null;
 +  window.simpleLiveLoadMore = () => {
 +    if (!nextUrl) return false;
