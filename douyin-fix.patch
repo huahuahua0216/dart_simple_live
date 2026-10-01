@@ -1,5 +1,5 @@
 diff --git a/simple_live_app/lib/modules/mine/account/account_controller.dart b/simple_live_app/lib/modules/mine/account/account_controller.dart
-index 31fbeea..6882f0a 100644
+index 31fbeea..ce598a0 100644
 --- a/simple_live_app/lib/modules/mine/account/account_controller.dart
 +++ b/simple_live_app/lib/modules/mine/account/account_controller.dart
 @@ -7,7 +7,6 @@ import 'package:simple_live_app/app/utils.dart';
@@ -10,21 +10,33 @@ index 31fbeea..6882f0a 100644
  
  class AccountController extends GetxController {
    void bilibiliTap() async {
-@@ -84,7 +83,7 @@ class AccountController extends GetxController {
-       var result = await Utils.showAlertDialog("确定要清除自定义 ttwid 吗？", title: "清除配置");
+@@ -81,10 +80,10 @@ class AccountController extends GetxController {
+ 
+   void douyinTap() async {
+     if (DouyinAccountService.instance.hasCookie.value) {
+-      var result = await Utils.showAlertDialog("确定要清除自定义 ttwid 吗？", title: "清除配置");
++      var result = await Utils.showAlertDialog("确定要清除自定义抖音 Cookie 吗？", title: "清除配置");
        if (result) {
          DouyinAccountService.instance.clearCookie();
 -        SmartDialog.showToast("已清除自定义 ttwid，将使用默认 ttwid");
-+        SmartDialog.showToast("已清除自定义 ttwid，将自动获取访客会话");
++        SmartDialog.showToast("已清除自定义 Cookie，将自动获取访客会话");
        }
      } else {
        doDouyinCookieConfig();
-@@ -109,7 +108,7 @@ class AccountController extends GetxController {
+@@ -102,14 +101,14 @@ class AccountController extends GetxController {
+ 
+     Get.dialog(
+       AlertDialog(
+-        title: const Text("配置抖音 ttwid"),
++        title: const Text("配置抖音 Cookie"),
+         content: SingleChildScrollView(
+           child: Column(
+             mainAxisSize: MainAxisSize.min,
              crossAxisAlignment: CrossAxisAlignment.start,
              children: [
                const Text(
 -                "默认已内置有效的 ttwid，可观看所有画质（包括蓝光）。\n如有需要可自定义配置。",
-+                "未配置时自动获取访客会话。如需自定义，请填写自己的 ttwid。",
++                "推荐和分类自动获取访客会话。搜索需要完整的登录 Cookie；也可只填写 ttwid。Cookie 仅保存到本机，请勿分享。",
                  style: TextStyle(fontSize: 12, color: Colors.grey),
                ),
                const SizedBox(height: 12),
@@ -33,7 +45,7 @@ index 31fbeea..6882f0a 100644
                  maxLines: 3,
                  decoration: const InputDecoration(
 -                  hintText: "请粘贴 ttwid 值（留空则使用默认值）",
-+                  hintText: "请粘贴 ttwid 值（留空则自动获取）",
++                  hintText: "完整登录 Cookie 或 ttwid（留空则自动获取）",
                    border: OutlineInputBorder(),
                  ),
                ),
@@ -54,7 +66,7 @@ index 31fbeea..6882f0a 100644
                ),
              ],
            ),
-@@ -148,7 +142,7 @@ class AccountController extends GetxController {
+@@ -148,15 +142,15 @@ class AccountController extends GetxController {
                Get.back();
                if (input.isEmpty) {
                  DouyinAccountService.instance.clearCookie();
@@ -63,6 +75,16 @@ index 31fbeea..6882f0a 100644
                } else {
                  // 如果用户只输入了 ttwid 值，自动添加 "ttwid=" 前缀
                  var cookie = input;
+-                if (!input.startsWith('ttwid=')) {
++                if (!input.contains('=')) {
+                   cookie = 'ttwid=$input';
+                 }
+                 DouyinAccountService.instance.setCookie(cookie);
+-                SmartDialog.showToast("ttwid 已保存");
++                SmartDialog.showToast("抖音 Cookie 已保存");
+               }
+             },
+             child: const Text("确定"),
 diff --git a/simple_live_app/lib/modules/mine/account/account_page.dart b/simple_live_app/lib/modules/mine/account/account_page.dart
 index 7ea0fed..237f591 100644
 --- a/simple_live_app/lib/modules/mine/account/account_page.dart
@@ -77,10 +99,18 @@ index 7ea0fed..237f591 100644
                    ? const Icon(Icons.delete_outline)
                    : const Icon(Icons.chevron_right),
 diff --git a/simple_live_core/lib/src/douyin_site.dart b/simple_live_core/lib/src/douyin_site.dart
-index 9c1fc82..baaf397 100644
+index 9c1fc82..cd55f5d 100644
 --- a/simple_live_core/lib/src/douyin_site.dart
 +++ b/simple_live_core/lib/src/douyin_site.dart
-@@ -32,6 +32,9 @@ class DouyinSite implements LiveSite {
+@@ -3,6 +3,7 @@ import 'dart:math';
+ 
+ import 'package:simple_live_core/simple_live_core.dart';
+ import 'package:simple_live_core/src/common/convert_helper.dart';
++import 'package:simple_live_core/src/common/douyin_category_parser.dart';
+ import 'package:simple_live_core/src/common/http_client.dart';
+ import 'package:simple_live_core/src/scripts/douyin_sign.dart';
+ 
+@@ -32,6 +33,9 @@ class DouyinSite implements LiveSite {
    /// 用户设置的 cookie
    String cookie = "";
  
@@ -90,7 +120,7 @@ index 9c1fc82..baaf397 100644
    void _logDebug(String msg) {
      // 同时使用 print 和 CoreLog 确保日志输出
      print("[Douyin] $msg");
-@@ -45,27 +48,66 @@ class DouyinSite implements LiveSite {
+@@ -45,27 +49,66 @@ class DouyinSite implements LiveSite {
    };
  
    Future<Map<String, dynamic>> getRequestHeaders() async {
@@ -137,11 +167,11 @@ index 9c1fc82..baaf397 100644
 +      final token = response.headers.value('x-ms-token');
 +      if (token != null && token.isNotEmpty) {
 +        _sessionCookies['msToken'] = token;
-+      }
-+      if (!_sessionCookies.containsKey('ttwid')) {
-+        throw Exception('Douyin did not issue a visitor cookie');
        }
 -      return headers;
++      if (!_sessionCookies.containsKey('ttwid')) {
++        throw Exception('Douyin did not issue a visitor cookie');
++      }
 +    } catch (_) {
 +      _sessionCookies.clear();
 +      _sessionInitialization = null;
@@ -170,7 +200,29 @@ index 9c1fc82..baaf397 100644
      List<LiveCategory> categories = [];
      var result = await HttpClient.instance.getText(
        "https://live.douyin.com/",
-@@ -122,6 +164,11 @@ class DouyinSite implements LiveSite {
+@@ -73,20 +116,7 @@ class DouyinSite implements LiveSite {
+       header: await getRequestHeaders(),
+     );
+ 
+-    var renderData =
+-        RegExp(
+-          r'\{\\"pathname\\":\\"\/\\",\\"categoryData.*?\]\\n',
+-        ).firstMatch(result)?.group(0) ??
+-        "";
+-    var renderDataJson = json.decode(
+-      renderData
+-          .trim()
+-          .replaceAll('\\"', '"')
+-          .replaceAll(r"\\", r"\")
+-          .replaceAll(']\\n', ""),
+-    );
+-
+-    for (var item in renderDataJson["categoryData"]) {
++    for (var item in parseDouyinCategories(result)) {
+       List<LiveSubCategory> subs = [];
+       var id = '${item["partition"]["id_str"]},${item["partition"]["type"]}';
+       for (var subItem in item["sub_partition"]) {
+@@ -122,6 +152,11 @@ class DouyinSite implements LiveSite {
    Future<LiveCategoryResult> getCategoryRooms(
      LiveSubCategory category, {
      int page = 1,
@@ -182,7 +234,7 @@ index 9c1fc82..baaf397 100644
    }) async {
      var ids = category.id.split(',');
      var partitionId = ids[0];
-@@ -182,6 +229,10 @@ class DouyinSite implements LiveSite {
+@@ -182,6 +217,10 @@ class DouyinSite implements LiveSite {
  
    @override
    Future<LiveCategoryResult> getRecommendRooms({int page = 1}) async {
@@ -193,7 +245,7 @@ index 9c1fc82..baaf397 100644
      String serverUrl =
          "https://live.douyin.com/webcast/web/partition/detail/room/v2/";
      var uri = Uri.parse(serverUrl).replace(
-@@ -641,6 +692,11 @@ class DouyinSite implements LiveSite {
+@@ -641,6 +680,11 @@ class DouyinSite implements LiveSite {
    Future<LiveSearchRoomResult> searchRooms(
      String keyword, {
      int page = 1,
@@ -205,7 +257,7 @@ index 9c1fc82..baaf397 100644
    }) async {
      String serverUrl = "https://www.douyin.com/aweme/v1/web/live/search/";
      var uri = Uri.parse(serverUrl).replace(
-@@ -682,22 +738,8 @@ class DouyinSite implements LiveSite {
+@@ -682,22 +726,8 @@ class DouyinSite implements LiveSite {
          "webid": "7382872326016435738",
        },
      );
@@ -230,7 +282,7 @@ index 9c1fc82..baaf397 100644
  
      var result = await HttpClient.instance.getJson(
        requlestUrl,
-@@ -706,7 +748,7 @@ class DouyinSite implements LiveSite {
+@@ -706,7 +736,7 @@ class DouyinSite implements LiveSite {
          "Authority": 'www.douyin.com',
          'accept': 'application/json, text/plain, */*',
          'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
@@ -239,10 +291,13 @@ index 9c1fc82..baaf397 100644
          'priority': 'u=1, i',
          'referer':
              'https://www.douyin.com/search/${Uri.encodeComponent(keyword)}?type=live',
-@@ -723,6 +765,9 @@ class DouyinSite implements LiveSite {
+@@ -723,6 +753,12 @@ class DouyinSite implements LiveSite {
      if (result == "" || result == 'blocked') {
        throw Exception("抖音直播搜索被限制，请稍后再试");
      }
++    if (result is Map && result['status_code'] == 2483) {
++      throw Exception("抖音要求登录后搜索，请在账号管理配置完整的抖音登录 Cookie");
++    }
 +    if (result is! Map || result['data'] is! List) {
 +      throw Exception("抖音直播搜索返回异常，请稍后再试");
 +    }
@@ -251,16 +306,45 @@ index 9c1fc82..baaf397 100644
        var itemData = json.decode(item["lives"]["rawdata"].toString());
 diff --git a/simple_live_core/test/douyin_session_test.dart b/simple_live_core/test/douyin_session_test.dart
 new file mode 100644
-index 0000000..d6b4409
+index 0000000..d7100f4
 --- /dev/null
 +++ b/simple_live_core/test/douyin_session_test.dart
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,106 @@
++import 'dart:convert';
++
 +import 'package:dio/dio.dart';
 +import 'package:simple_live_core/simple_live_core.dart';
++import 'package:simple_live_core/src/common/douyin_category_parser.dart';
 +import 'package:simple_live_core/src/common/http_client.dart';
 +import 'package:test/test.dart';
 +
 +void main() {
++  test('categories are decoded without trailing React component data', () {
++    final category = {
++      'partition': {'id_str': '102', 'type': 4, 'title': 'Music "live"'},
++      'sub_partition': [],
++    };
++    final record = '2:${jsonEncode([
++      r'$',
++      'component',
++      null,
++      {
++        'children': [
++          {'pathname': '/', 'categoryData': [category]},
++          [r'$', 'another-component', null, {'children': r'$undefined'}],
++        ],
++      },
++    ])}\n';
++    final split = record.length ~/ 2;
++    for (final stream in ['pace', 'next']) {
++      final html = '<script>self.__${stream}_f.push(${jsonEncode([1, record.substring(0, split)])})</script>'
++          '<script>self.__${stream}_f.push(${jsonEncode([1, record.substring(split)])})</script>';
++      expect(parseDouyinCategories(html), [category]);
++    }
++    expect(() => parseDouyinCategories('<html>unavailable</html>'),
++        throwsFormatException);
++  });
++
 +  late Dio originalClient;
 +  late Dio client;
 +  var requests = 0;
@@ -331,4 +415,57 @@ index 0000000..d6b4409
 +    expect((await site.getRequestHeaders())['cookie'], 'ttwid=new-visitor');
 +    expect(requests, 2);
 +  });
++}
+diff --git a/simple_live_core/lib/src/common/douyin_category_parser.dart b/simple_live_core/lib/src/common/douyin_category_parser.dart
+new file mode 100644
+index 0000000..5cfe71d
+--- /dev/null
++++ b/simple_live_core/lib/src/common/douyin_category_parser.dart
+@@ -0,0 +1,47 @@
++import 'dart:convert';
++
++List<dynamic> parseDouyinCategories(String html) {
++  final chunks = StringBuffer();
++  final scripts = RegExp(
++    r'self\.__(?:pace|next)_f\.push\((.*?)\)</script>',
++    dotAll: true,
++  );
++  for (final match in scripts.allMatches(html)) {
++    try {
++      final chunk = jsonDecode(match.group(1)!);
++      if (chunk is List && chunk.length > 1 && chunk[1] is String) {
++        chunks.write(chunk[1]);
++      }
++    } on FormatException {
++      continue;
++    }
++  }
++  // Decode the streamed component records before looking for category props.
++  for (final line in const LineSplitter().convert(chunks.toString())) {
++    final separator = line.indexOf(':');
++    if (separator < 0) continue;
++    try {
++      final categories = _findCategories(jsonDecode(line.substring(separator + 1)));
++      if (categories != null && categories.isNotEmpty) return categories;
++    } on FormatException {
++      continue;
++    }
++  }
++  throw const FormatException('Douyin category data was not found');
++}
++
++List<dynamic>? _findCategories(dynamic value) {
++  if (value is Map) {
++    if (value['categoryData'] is List) return value['categoryData'] as List;
++    for (final child in value.values) {
++      final result = _findCategories(child);
++      if (result != null) return result;
++    }
++  } else if (value is List) {
++    for (final child in value) {
++      final result = _findCategories(child);
++      if (result != null) return result;
++    }
++  }
++  return null;
 +}
