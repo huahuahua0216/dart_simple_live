@@ -1,0 +1,67 @@
+name: build-macos-only
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: source
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ci-config
+
+      - uses: actions/checkout@v4
+        with:
+          repository: xiaoyaocz/dart_simple_live
+          ref: ba828e6783b176ea5709fcd09f0eb01dfaceeb51
+          path: source
+
+      - name: Apply Douyin fixes
+        run: git apply "$GITHUB_WORKSPACE/ci-config/douyin-fix.patch"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.38.3"
+          cache: true
+
+      - name: Enable macOS desktop
+        run: flutter config --enable-macos-desktop
+
+      - name: Pin connectivity_plus for GitHub macOS runner
+        working-directory: source/simple_live_app
+        run: dart pub add connectivity_plus:7.0.0
+
+      - name: Restore packages
+        working-directory: source/simple_live_app
+        run: flutter pub get
+
+      - name: Test Douyin visitor session
+        working-directory: source/simple_live_core
+        run: |
+          dart pub get
+          dart test test/douyin_session_test.dart
+
+      - name: Install appdmg
+        run: npm install -g appdmg
+
+      - name: Install flutter_distributor
+        run: dart pub global activate flutter_distributor
+
+      - name: Build macOS DMG and ZIP
+        working-directory: source/simple_live_app
+        run: flutter_distributor package --platform macos --targets dmg,zip --skip-clean
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: simple-live-macos
+          path: |
+            source/simple_live_app/build/dist/**/*.dmg
+            source/simple_live_app/build/dist/**/*.zip
+          if-no-files-found: error
