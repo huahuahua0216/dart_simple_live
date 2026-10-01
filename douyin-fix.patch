@@ -98,8 +98,363 @@ index 7ea0fed..237f591 100644
                trailing: DouyinAccountService.instance.hasCookie.value
                    ? const Icon(Icons.delete_outline)
                    : const Icon(Icons.chevron_right),
+diff --git a/simple_live_app/lib/modules/search/douyin/douyin_search_controller.dart b/simple_live_app/lib/modules/search/douyin/douyin_search_controller.dart
+index 954e0a2..e0720a6 100644
+--- a/simple_live_app/lib/modules/search/douyin/douyin_search_controller.dart
++++ b/simple_live_app/lib/modules/search/douyin/douyin_search_controller.dart
+@@ -6,18 +6,37 @@ import 'package:simple_live_app/app/controller/base_controller.dart';
+ import 'package:simple_live_app/app/sites.dart';
+ import 'package:simple_live_app/routes/app_navigation.dart';
+ import 'package:simple_live_app/routes/route_path.dart';
+-import 'package:simple_live_core/simple_live_core.dart';
++import 'package:simple_live_app/services/douyin_account_service.dart';
+ import 'package:url_launcher/url_launcher_string.dart';
+ 
+ class DouyinSearchController extends BaseController {
+   InAppWebViewController? webViewController;
+ 
+-  void onWebViewCreated(InAppWebViewController controller) {
++  Future<void> onWebViewCreated(InAppWebViewController controller) async {
+     webViewController = controller;
++    try {
++      // Seed only Douyin cookies; never replace cookies for other sites.
++      final manager = CookieManager.instance();
++      for (final pair in DouyinAccountService.instance.cookie.split(';')) {
++        final separator = pair.indexOf('=');
++        if (separator <= 0) continue;
++        await manager.setCookie(
++          url: WebUri('https://www.douyin.com'),
++          name: pair.substring(0, separator).trim(),
++          value: pair.substring(separator + 1).trim(),
++          domain: '.douyin.com',
++          path: '/',
++          isSecure: true,
++        );
++      }
++      await reloadWebView(force: true);
++    } catch (_) {
++      pageLoadding.value = false;
++      pageError.value = true;
++      errorMsg.value = '抖音搜索加载失败，请重试';
++    }
+   }
+ 
+-  RxList<LiveRoomItem> list = <LiveRoomItem>[].obs;
+-
+   String keyword = "";
+ 
+   /// 搜索模式，0=直播间，1=主播
+@@ -27,44 +46,56 @@ class DouyinSearchController extends BaseController {
+     this.site,
+   );
+ 
+-  var searchUrl = "https://www.douyin.com/search/dnf?type=live";
++  var searchUrl = 'https://www.douyin.com/';
++  String? _loadedUrl;
+ 
+-  void reloadWebView() {
+-    if (keyword.isEmpty) {
+-      return;
+-    }
+-    searchUrl =
+-        "https://www.douyin.com/search/${Uri.encodeComponent(keyword)}?type=live";
+-    if (Platform.isAndroid || Platform.isIOS) {
+-      webViewController!.loadUrl(
++  Future<void> reloadWebView({bool force = false}) async {
++    searchUrl = keyword.isEmpty
++        ? 'https://www.douyin.com/'
++        : 'https://www.douyin.com/search/${Uri.encodeComponent(keyword)}?type=${searchMode.value == 0 ? 'live' : 'user'}';
++    if (webViewController == null || (!force && _loadedUrl == searchUrl)) return;
++    if (Platform.isMacOS || Platform.isAndroid || Platform.isIOS) {
++      pageError.value = false;
++      await webViewController!.loadUrl(
+         urlRequest: URLRequest(
+           url: WebUri(searchUrl),
+         ),
+       );
++      _loadedUrl = searchUrl;
+     }
+   }
+ 
+   void onLoadStop(InAppWebViewController controller, Uri? uri) async {
+     pageLoadding.value = false;
++    pageError.value = false;
+   }
+ 
+   void onLoadStart(InAppWebViewController controller, Uri? uri) async {
+     pageLoadding.value = true;
+   }
+ 
++  static String? roomIdFromUri(Uri? uri) {
++    if (uri == null || uri.scheme != 'https' || uri.host != 'live.douyin.com') {
++      return null;
++    }
++    if (uri.pathSegments.length != 1) return null;
++    final id = uri.pathSegments.single;
++    return RegExp(r'^\d{1,16}$').hasMatch(id) ? id : null;
++  }
++
++  bool openLiveRoom(Uri? uri) {
++    final id = roomIdFromUri(uri);
++    if (id == null) return false;
++    AppNavigator.toLiveRoomDetail(site: site, roomId: id);
++    return true;
++  }
++
+   Future<bool?> onCreateWindow(InAppWebViewController controller,
+       CreateWindowAction createWindowAction) async {
+-    if (createWindowAction.request.url?.host == "live.douyin.com") {
+-      {
+-        var regExp = RegExp(r"live\.douyin\.com/([\d|\w]+)");
+-        var id = regExp
+-                .firstMatch(createWindowAction.request.url.toString())
+-                ?.group(1) ??
+-            "";
+-
+-        AppNavigator.toLiveRoomDetail(site: site, roomId: id);
+-        return false;
+-      }
++    final uri = createWindowAction.request.url;
++    if (!openLiveRoom(uri) && uri != null && uri.scheme == 'https' &&
++        (uri.host == 'douyin.com' || uri.host.endsWith('.douyin.com'))) {
++      await controller.loadUrl(urlRequest: URLRequest(url: uri));
+     }
+ 
+     return false;
+diff --git a/simple_live_app/lib/modules/search/douyin/douyin_search_view.dart b/simple_live_app/lib/modules/search/douyin/douyin_search_view.dart
+index 67d1593..02b8aef 100644
+--- a/simple_live_app/lib/modules/search/douyin/douyin_search_view.dart
++++ b/simple_live_app/lib/modules/search/douyin/douyin_search_view.dart
+@@ -6,7 +6,6 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+ import 'package:get/get.dart';
+ import 'package:simple_live_app/app/app_style.dart';
+ import 'package:simple_live_app/modules/search/douyin/douyin_search_controller.dart';
+-import 'package:simple_live_app/routes/app_navigation.dart';
+ import 'package:simple_live_app/widgets/keep_alive_wrapper.dart';
+ import 'package:simple_live_app/widgets/status/app_loadding_widget.dart';
+ 
+@@ -16,15 +15,11 @@ class DouyinSearchView extends StatelessWidget {
+ 
+   @override
+   Widget build(BuildContext context) {
+-    var roomRowCount = MediaQuery.of(context).size.width ~/ 200;
+-    if (roomRowCount < 2) roomRowCount = 2;
+-
+-    var userRowCount = MediaQuery.of(context).size.width ~/ 500;
+-    if (userRowCount < 1) userRowCount = 1;
+     return KeepAliveWrapper(
+       child: Stack(
+         children: [
+-          SizedBox(
++          if (!Platform.isMacOS && !Platform.isAndroid && !Platform.isIOS)
++            SizedBox(
+             width: double.infinity,
+             height: double.infinity,
+             child: Center(
+@@ -48,17 +43,25 @@ class DouyinSearchView extends StatelessWidget {
+               ),
+             ),
+           ),
+-          if (Platform.isAndroid || Platform.isIOS)
++          if (Platform.isMacOS || Platform.isAndroid || Platform.isIOS)
+             InAppWebView(
+               onWebViewCreated: controller.onWebViewCreated,
+               onLoadStop: controller.onLoadStop,
+               onLoadStart: controller.onLoadStart,
+               initialSettings: InAppWebViewSettings(
+-                useOnLoadResource: true,
+-                userAgent:
+-                    "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1 Edg/118.0.0.0",
++                userAgent: Platform.isMacOS
++                    ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15'
++                    : "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1 Edg/118.0.0.0",
+                 useShouldOverrideUrlLoading: true,
++                supportMultipleWindows: true,
+               ),
++              onReceivedError: (webController, request, error) {
++                if (request.isForMainFrame == true) {
++                  controller.pageLoadding.value = false;
++                  controller.pageError.value = true;
++                  controller.errorMsg.value = '抖音搜索加载失败，请重试';
++                }
++              },
+               onCreateWindow: controller.onCreateWindow,
+               shouldOverrideUrlLoading:
+                   (webController, navigationAction) async {
+@@ -66,12 +69,7 @@ class DouyinSearchView extends StatelessWidget {
+                 if (uri == null) {
+                   return NavigationActionPolicy.ALLOW;
+                 }
+-                if (uri.host == "live.douyin.com") {
+-                  var regExp = RegExp(r"live\.douyin\.com/([\d|\w]+)");
+-                  var id = regExp.firstMatch(uri.toString())?.group(1) ?? "";
+-
+-                  AppNavigator.toLiveRoomDetail(
+-                      site: controller.site, roomId: id);
++                if (controller.openLiveRoom(uri)) {
+                   return NavigationActionPolicy.CANCEL;
+                 }
+                 return NavigationActionPolicy.ALLOW;
+@@ -83,6 +81,21 @@ class DouyinSearchView extends StatelessWidget {
+               child: const AppLoaddingWidget(),
+             ),
+           ),
++          Obx(() => controller.pageError.value
++              ? Center(
++                  child: Column(
++                    mainAxisSize: MainAxisSize.min,
++                    children: [
++                      Text(controller.errorMsg.value),
++                      IconButton(
++                        tooltip: '重试',
++                        icon: const Icon(Icons.refresh),
++                        onPressed: () => controller.reloadWebView(force: true),
++                      ),
++                    ],
++                  ),
++                )
++              : const SizedBox.shrink()),
+         ],
+       ),
+     );
+diff --git a/simple_live_app/lib/modules/search/search_controller.dart b/simple_live_app/lib/modules/search/search_controller.dart
+index e8f242c..f9b3d5f 100644
+--- a/simple_live_app/lib/modules/search/search_controller.dart
++++ b/simple_live_app/lib/modules/search/search_controller.dart
+@@ -1,13 +1,18 @@
+ import 'dart:async';
++import 'dart:io';
+ 
+ import 'package:flutter/material.dart';
+ 
+ import 'package:get/get.dart';
+ import 'package:simple_live_app/app/sites.dart';
++import 'package:simple_live_app/app/constant.dart';
++import 'package:simple_live_app/modules/search/douyin/douyin_search_controller.dart';
+ import 'package:simple_live_app/modules/search/search_list_controller.dart';
+ 
+ class AppSearchController extends GetxController
+     with GetSingleTickerProviderStateMixin {
++  static bool usesWebSearch(Site site) =>
++      Platform.isMacOS && site.id == Constant.kDouyin;
+   late TabController tabController;
+   int index = 0;
+ 
+@@ -23,9 +28,11 @@ class AppSearchController extends GetxController
+       }
+ 
+       index = currentIndex;
+-      // if (Sites.supportSites[index].id == Constant.kDouyin) {
+-      //   return;
+-      // }
++      final site = Sites.supportSites[index];
++      if (usesWebSearch(site)) {
++        Get.find<DouyinSearchController>().reloadWebView();
++        return;
++      }
+ 
+       var controller =
+           Get.find<SearchListController>(tag: Sites.supportSites[index].id);
+@@ -45,14 +52,11 @@ class AppSearchController extends GetxController
+   @override
+   void onInit() {
+     for (var site in Sites.supportSites) {
+-      // if (site.id == Constant.kDouyin) {
+-      //   Get.put(DouyinSearchController(site));
+-      // } else {
+-      Get.put(
+-        SearchListController(site),
+-        tag: site.id,
+-      );
+-      //}
++      if (usesWebSearch(site)) {
++        Get.put(DouyinSearchController(site));
++      } else {
++        Get.put(SearchListController(site), tag: site.id);
++      }
+     }
+ 
+     super.onInit();
+@@ -63,28 +67,30 @@ class AppSearchController extends GetxController
+       return;
+     }
+     for (var site in Sites.supportSites) {
+-      // if (site.id == Constant.kDouyin) {
+-      //   var controller = Get.find<DouyinSearchController>();
+-      //   controller.keyword = searchController.text;
+-      //   controller.searchMode.value = searchMode.value;
+-      //   controller.reloadWebView();
+-      // } else {
+-      var controller = Get.find<SearchListController>(tag: site.id);
+-      controller.clear();
+-      controller.keyword = searchController.text;
+-      controller.searchMode.value = searchMode.value;
+-      //}
++      if (usesWebSearch(site)) {
++        final controller = Get.find<DouyinSearchController>();
++        controller.keyword = searchController.text.trim();
++        controller.searchMode.value = searchMode.value;
++      } else {
++        final controller = Get.find<SearchListController>(tag: site.id);
++        controller.clear();
++        controller.keyword = searchController.text;
++        controller.searchMode.value = searchMode.value;
++      }
++    }
++    final site = Sites.supportSites[index];
++    if (usesWebSearch(site)) {
++      Get.find<DouyinSearchController>().reloadWebView(force: true);
++    } else {
++      Get.find<SearchListController>(tag: site.id).refreshData();
+     }
+-    // if (Sites.supportSites[index].id != Constant.kDouyin) {
+-    var controller =
+-        Get.find<SearchListController>(tag: Sites.supportSites[index].id);
+-    controller.refreshData();
+-    //}
+   }
+ 
+   @override
+   void onClose() {
+     streamSubscription?.cancel();
++    searchController.dispose();
++    tabController.dispose();
+     super.onClose();
+   }
+ }
+diff --git a/simple_live_app/lib/modules/search/search_page.dart b/simple_live_app/lib/modules/search/search_page.dart
+index 03ba186..1021322 100644
+--- a/simple_live_app/lib/modules/search/search_page.dart
++++ b/simple_live_app/lib/modules/search/search_page.dart
+@@ -4,6 +4,7 @@ import 'package:simple_live_app/app/app_style.dart';
+ import 'package:simple_live_app/app/sites.dart';
+ import 'package:simple_live_app/modules/search/search_controller.dart';
+ import 'package:simple_live_app/modules/search/search_list_view.dart';
++import 'package:simple_live_app/modules/search/douyin/douyin_search_view.dart';
+ 
+ class SearchPage extends GetView<AppSearchController> {
+   const SearchPage({Key? key}) : super(key: key);
+@@ -91,15 +92,9 @@ class SearchPage extends GetView<AppSearchController> {
+         physics: const NeverScrollableScrollPhysics(),
+         controller: controller.tabController,
+         children: Sites.supportSites
+-            .map((e) => SearchListView(
+-                      e.id,
+-                    )
+-                // (e) => e.id == Constant.kDouyin
+-                //     ? const DouyinSearchView()
+-                //     : SearchListView(
+-                //         e.id,
+-                //       ),
+-                )
++            .map((e) => AppSearchController.usesWebSearch(e)
++                ? const DouyinSearchView()
++                : SearchListView(e.id))
+             .toList(),
+       ),
+     );
 diff --git a/simple_live_core/lib/src/douyin_site.dart b/simple_live_core/lib/src/douyin_site.dart
-index 9c1fc82..cd55f5d 100644
+index 9c1fc82..33eabc2 100644
 --- a/simple_live_core/lib/src/douyin_site.dart
 +++ b/simple_live_core/lib/src/douyin_site.dart
 @@ -3,6 +3,7 @@ import 'dart:math';
@@ -291,12 +646,16 @@ index 9c1fc82..cd55f5d 100644
          'priority': 'u=1, i',
          'referer':
              'https://www.douyin.com/search/${Uri.encodeComponent(keyword)}?type=live',
-@@ -723,6 +753,12 @@ class DouyinSite implements LiveSite {
+@@ -723,6 +753,16 @@ class DouyinSite implements LiveSite {
      if (result == "" || result == 'blocked') {
        throw Exception("抖音直播搜索被限制，请稍后再试");
      }
 +    if (result is Map && result['status_code'] == 2483) {
 +      throw Exception("抖音要求登录后搜索，请在账号管理配置完整的抖音登录 Cookie");
++    }
++    if (result is Map && result['search_nil_info'] is Map &&
++        result['search_nil_info']['search_nil_type'] == 'verify_check') {
++      throw Exception('抖音要求安全验证，请使用官网搜索并完成验证后重试');
 +    }
 +    if (result is! Map || result['data'] is! List) {
 +      throw Exception("抖音直播搜索返回异常，请稍后再试");
@@ -468,4 +827,31 @@ index 0000000..5cfe71d
 +    }
 +  }
 +  return null;
++}
+diff --git a/simple_live_app/test/douyin_search_test.dart b/simple_live_app/test/douyin_search_test.dart
+new file mode 100644
+index 0000000..8da87b8
+--- /dev/null
++++ b/simple_live_app/test/douyin_search_test.dart
+@@ -0,0 +1,21 @@
++import 'package:flutter_test/flutter_test.dart';
++import 'package:simple_live_app/modules/search/douyin/douyin_search_controller.dart';
++
++void main() {
++  test('only HTTPS Douyin live room links open the native player', () {
++    expect(DouyinSearchController.roomIdFromUri(
++        Uri.parse('https://live.douyin.com/317454775493?from_search=true')),
++        '317454775493');
++    for (final url in [
++      'https://live.douyin.com/',
++      'https://live.douyin.com/search',
++      'https://live.douyin.com/123/456',
++      'https://live.douyin.com.evil.example/123',
++      'http://live.douyin.com/123',
++      'https://www.douyin.com/user/123',
++      'https://live.douyin.com/12345678901234567',
++    ]) {
++      expect(DouyinSearchController.roomIdFromUri(Uri.parse(url)), isNull);
++    }
++  });
 +}
