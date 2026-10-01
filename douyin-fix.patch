@@ -99,7 +99,7 @@ index 7ea0fed..237f591 100644
                    ? const Icon(Icons.delete_outline)
                    : const Icon(Icons.chevron_right),
 diff --git a/simple_live_app/lib/modules/search/douyin/douyin_search_controller.dart b/simple_live_app/lib/modules/search/douyin/douyin_search_controller.dart
-index 954e0a2..094e666 100644
+index 954e0a2..f0ca4c4 100644
 --- a/simple_live_app/lib/modules/search/douyin/douyin_search_controller.dart
 +++ b/simple_live_app/lib/modules/search/douyin/douyin_search_controller.dart
 @@ -1,4 +1,5 @@
@@ -162,7 +162,7 @@ index 954e0a2..094e666 100644
    String keyword = "";
  
    /// 搜索模式，0=直播间，1=主播
-@@ -27,44 +58,136 @@ class DouyinSearchController extends BaseController {
+@@ -27,44 +58,128 @@ class DouyinSearchController extends BaseController {
      this.site,
    );
  
@@ -175,9 +175,10 @@ index 954e0a2..094e666 100644
 +  Future<void> reloadWebView({bool force = false}) async {
 +    final nextUrl = keyword.isEmpty ? 'https://www.douyin.com/' :
 +        'https://www.douyin.com/search/${Uri.encodeComponent(keyword)}?type=live';
-+    if (!force && _loadedUrl == nextUrl) return;
++    if (!force && _loadedUrl == nextUrl && searchMode.value == 0) return;
 +    _generation++;
 +    _timeout?.cancel();
++    _waiting = false;
 +    _offsets.clear();
 +    list.clear();
 +    pageEmpty.value = false;
@@ -211,14 +212,7 @@ index 954e0a2..094e666 100644
      }
    }
  
-   void onLoadStop(InAppWebViewController controller, Uri? uri) async {
--    pageLoadding.value = false;
-   }
- 
-   void onLoadStart(InAppWebViewController controller, Uri? uri) async {
--    pageLoadding.value = true;
-+  }
-+
+-  void onLoadStop(InAppWebViewController controller, Uri? uri) async {
 +  void _beginWaiting() {
 +    _waiting = true;
 +    pageLoadding.value = list.isEmpty;
@@ -254,9 +248,11 @@ index 954e0a2..094e666 100644
 +    }
 +    _waiting = false;
 +    _timeout?.cancel();
-+    pageLoadding.value = false;
-+  }
-+
+     pageLoadding.value = false;
+   }
+ 
+-  void onLoadStart(InAppWebViewController controller, Uri? uri) async {
+-    pageLoadding.value = true;
 +  int get generation => _generation;
 +
 +  @override
@@ -266,12 +262,9 @@ index 954e0a2..094e666 100644
 +  Future loadData() async {
 +    if (_waiting || !canLoadMore.value || showVerification.value) return;
 +    _beginWaiting();
++    // Use Douyin's initialized request SDK to sign the next page in the browser.
 +    await webViewController?.evaluateJavascript(source: '''
-+      window.scrollTo(0, document.documentElement.scrollHeight);
-+      document.querySelectorAll('*').forEach(el => {
-+        if (el.scrollHeight > el.clientHeight && el.clientHeight > 200 &&
-+            /auto|scroll/.test(getComputedStyle(el).overflowY)) el.scrollTop = el.scrollHeight;
-+      });
++      window.simpleLiveLoadMore && window.simpleLiveLoadMore();
 +    ''');
 +  }
 +
@@ -986,13 +979,15 @@ index 0000000..5cfe71d
 +}
 diff --git a/simple_live_app/test/douyin_search_test.dart b/simple_live_app/test/douyin_search_test.dart
 new file mode 100644
-index 0000000..bf49de9
+index 0000000..ad12dc1
 --- /dev/null
 +++ b/simple_live_app/test/douyin_search_test.dart
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,76 @@
 +import 'package:flutter_test/flutter_test.dart';
 +import 'package:simple_live_app/modules/search/douyin/douyin_search_controller.dart';
 +import 'package:simple_live_app/modules/search/douyin/douyin_search_results.dart';
++import 'package:simple_live_app/app/sites.dart';
++import 'package:simple_live_core/simple_live_core.dart';
 +
 +void main() {
 +  Map room(String id) => {'lives': {'rawdata': {
@@ -1023,6 +1018,30 @@ index 0000000..bf49de9
 +    }
 +  });
 +
++  test('native result updates reject old searches and deduplicate pages', () async {
++    final controller = DouyinSearchController(Site(id: 'douyin',
++      liveSite: DouyinSite(), logo: '', name: '抖音'));
++    controller.keyword = 'NBA';
++    await controller.reloadWebView(force: true);
++    Map payload(int offset, List<Map> rooms, {String keyword = 'NBA', String? generation}) => {
++      'url': 'https://www.douyin.com/aweme/v1/web/live/search/?keyword=$keyword&offset=$offset',
++      'generation': generation ?? '${controller.generation}',
++      'data': {'status_code': 0, 'data': rooms, 'has_more': offset == 0 ? 1 : 0},
++    };
++    controller.acceptResults(payload(0, [room('999')], generation: '0'));
++    controller.acceptResults(payload(0, [room('999')], keyword: 'other'));
++    expect(controller.list, isEmpty);
++    controller.acceptResults(payload(0, [room('123')]));
++    controller.acceptResults(payload(0, [room('999')]));
++    controller.acceptResults(payload(10, [room('123'), room('456')]));
++    expect(controller.list.map((item) => item.roomId), ['123', '456']);
++    expect(controller.canLoadMore.value, isFalse);
++    await controller.reloadWebView(force: true);
++    controller.acceptResults(payload(0, [room('999')], generation: '1'));
++    expect(controller.list, isEmpty);
++    controller.onClose();
++  });
++
 +  test('only HTTPS Douyin live room links open the native player', () {
 +    expect(DouyinSearchController.roomIdFromUri(
 +        Uri.parse('https://live.douyin.com/317454775493?from_search=true')),
@@ -1042,10 +1061,10 @@ index 0000000..bf49de9
 +}
 diff --git a/simple_live_app/lib/modules/search/douyin/douyin_search_results.dart b/simple_live_app/lib/modules/search/douyin/douyin_search_results.dart
 new file mode 100644
-index 0000000..b8441af
+index 0000000..bb7b8e6
 --- /dev/null
 +++ b/simple_live_app/lib/modules/search/douyin/douyin_search_results.dart
-@@ -0,0 +1,81 @@
+@@ -0,0 +1,100 @@
 +import 'dart:convert';
 +
 +import 'package:simple_live_core/simple_live_core.dart';
@@ -1094,12 +1113,31 @@ index 0000000..b8441af
 +
 +const douyinSearchCaptureScript = r'''
 +(() => {
++  const generation = new URL(location.href).searchParams.get('simple_live_generation');
++  let nextUrl = null;
++  window.simpleLiveLoadMore = () => {
++    if (!nextUrl) return false;
++    const request = new XMLHttpRequest();
++    request.open('GET', nextUrl);
++    request.withCredentials = true;
++    request.send();
++    return true;
++  };
 +  const send = (url, data) => {
 +    try {
 +      const u = new URL(url, location.href);
 +      if (u.origin !== 'https://www.douyin.com' ||
 +          u.pathname !== '/aweme/v1/web/live/search/') return;
-+      const payload = {url: u.href, data, generation: new URL(location.href).searchParams.get('simple_live_generation')};
++      if (data.status_code === 0 && (data.has_more === 1 || data.has_more === true)) {
++        const next = new URL(u.href);
++        ['a_bogus', 'msToken', '_signature'].forEach(key => next.searchParams.delete(key));
++        const offset = Number(u.searchParams.get('offset') || 0);
++        const cursor = Number(data.cursor);
++        next.searchParams.set('offset', String(Number.isFinite(cursor) && cursor > offset
++          ? cursor : offset + Number(u.searchParams.get('count') || 10)));
++        nextUrl = next.href;
++      } else nextUrl = null;
++      const payload = {url: u.href, data, generation};
 +      const deliver = () => window.flutter_inappwebview.callHandler('douyinSearchResults', payload);
 +      if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) deliver();
 +      else window.addEventListener('flutterInAppWebViewPlatformReady', deliver, {once: true});
@@ -1108,7 +1146,7 @@ index 0000000..b8441af
 +  const open = XMLHttpRequest.prototype.open;
 +  XMLHttpRequest.prototype.open = function(method, url, ...args) {
 +    this.addEventListener('load', () => {
-+      try { send(url, this.responseType === 'json' ? this.response : JSON.parse(this.responseText)); } catch (_) {}
++      try { send(this.responseURL || url, this.responseType === 'json' ? this.response : JSON.parse(this.responseText)); } catch (_) {}
 +    }, {once: true});
 +    return open.call(this, method, url, ...args);
 +  };
