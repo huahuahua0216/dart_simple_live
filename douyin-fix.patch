@@ -1,0 +1,334 @@
+diff --git a/simple_live_app/lib/modules/mine/account/account_controller.dart b/simple_live_app/lib/modules/mine/account/account_controller.dart
+index 31fbeea..6882f0a 100644
+--- a/simple_live_app/lib/modules/mine/account/account_controller.dart
++++ b/simple_live_app/lib/modules/mine/account/account_controller.dart
+@@ -7,7 +7,6 @@ import 'package:simple_live_app/app/utils.dart';
+ import 'package:simple_live_app/routes/route_path.dart';
+ import 'package:simple_live_app/services/bilibili_account_service.dart';
+ import 'package:simple_live_app/services/douyin_account_service.dart';
+-import 'package:simple_live_core/simple_live_core.dart';
+ 
+ class AccountController extends GetxController {
+   void bilibiliTap() async {
+@@ -84,7 +83,7 @@ class AccountController extends GetxController {
+       var result = await Utils.showAlertDialog("确定要清除自定义 ttwid 吗？", title: "清除配置");
+       if (result) {
+         DouyinAccountService.instance.clearCookie();
+-        SmartDialog.showToast("已清除自定义 ttwid，将使用默认 ttwid");
++        SmartDialog.showToast("已清除自定义 ttwid，将自动获取访客会话");
+       }
+     } else {
+       doDouyinCookieConfig();
+@@ -109,7 +108,7 @@ class AccountController extends GetxController {
+             crossAxisAlignment: CrossAxisAlignment.start,
+             children: [
+               const Text(
+-                "默认已内置有效的 ttwid，可观看所有画质（包括蓝光）。\n如有需要可自定义配置。",
++                "未配置时自动获取访客会话。如需自定义，请填写自己的 ttwid。",
+                 style: TextStyle(fontSize: 12, color: Colors.grey),
+               ),
+               const SizedBox(height: 12),
+@@ -117,22 +116,17 @@ class AccountController extends GetxController {
+                 controller: controller,
+                 maxLines: 3,
+                 decoration: const InputDecoration(
+-                  hintText: "请粘贴 ttwid 值（留空则使用默认值）",
++                  hintText: "请粘贴 ttwid 值（留空则自动获取）",
+                   border: OutlineInputBorder(),
+                 ),
+               ),
+               const SizedBox(height: 8),
+               TextButton.icon(
+                 onPressed: () {
+-                  // 提取 ttwid 的值部分（去掉 "ttwid=" 前缀）
+-                  var defaultValue = DouyinSite.kDefaultCookie;
+-                  if (defaultValue.startsWith('ttwid=')) {
+-                    defaultValue = defaultValue.substring(6); // 去掉 "ttwid="
+-                  }
+-                  controller.text = defaultValue;
++                  controller.clear();
+                 },
+                 icon: const Icon(Icons.restore),
+-                label: const Text("恢复默认 ttwid"),
++                label: const Text("自动获取访客会话"),
+               ),
+             ],
+           ),
+@@ -148,7 +142,7 @@ class AccountController extends GetxController {
+               Get.back();
+               if (input.isEmpty) {
+                 DouyinAccountService.instance.clearCookie();
+-                SmartDialog.showToast("已清除自定义 Cookie，将使用默认 ttwid");
++                SmartDialog.showToast("已清除自定义 Cookie，将自动获取访客会话");
+               } else {
+                 // 如果用户只输入了 ttwid 值，自动添加 "ttwid=" 前缀
+                 var cookie = input;
+diff --git a/simple_live_app/lib/modules/mine/account/account_page.dart b/simple_live_app/lib/modules/mine/account/account_page.dart
+index 7ea0fed..237f591 100644
+--- a/simple_live_app/lib/modules/mine/account/account_page.dart
++++ b/simple_live_app/lib/modules/mine/account/account_page.dart
+@@ -70,7 +70,7 @@ class AccountPage extends GetView<AccountController> {
+               title: const Text("抖音直播"),
+               subtitle: Text(DouyinAccountService.instance.hasCookie.value
+                   ? "已自定义（${DouyinAccountService.instance.cookie.length} 字符）"
+-                  : "使用默认 ttwid"),
++                  : "自动获取访客会话"),
+               trailing: DouyinAccountService.instance.hasCookie.value
+                   ? const Icon(Icons.delete_outline)
+                   : const Icon(Icons.chevron_right),
+diff --git a/simple_live_core/lib/src/douyin_site.dart b/simple_live_core/lib/src/douyin_site.dart
+index 9c1fc82..baaf397 100644
+--- a/simple_live_core/lib/src/douyin_site.dart
++++ b/simple_live_core/lib/src/douyin_site.dart
+@@ -32,6 +32,9 @@ class DouyinSite implements LiveSite {
+   /// 用户设置的 cookie
+   String cookie = "";
+ 
++  final Map<String, String> _sessionCookies = {};
++  Future<void>? _sessionInitialization;
++
+   void _logDebug(String msg) {
+     // 同时使用 print 和 CoreLog 确保日志输出
+     print("[Douyin] $msg");
+@@ -45,27 +48,66 @@ class DouyinSite implements LiveSite {
+   };
+ 
+   Future<Map<String, dynamic>> getRequestHeaders() async {
++    if (cookie.isEmpty && _sessionCookies.isEmpty) {
++      await (_sessionInitialization ??= _initializeSession());
++    }
++    return {
++      ...headers,
++      "cookie": cookie.isNotEmpty
++          ? cookie
++          : _sessionCookies.entries
++              .map((entry) => '${entry.key}=${entry.value}')
++              .join('; '),
++    };
++  }
++
++  Future<void> _initializeSession() async {
+     try {
+-      // 如果用户已设置 cookie，直接使用用户的 cookie
+-      if (cookie.isNotEmpty) {
+-        headers["cookie"] = cookie;
+-        return headers;
++      // HEAD can return 404 while still issuing a valid visitor cookie.
++      final response = await HttpClient.instance.head(
++        '$kDefaultReferer/',
++        header: Map<String, dynamic>.from(headers),
++      );
++      for (final value in response.headers['set-cookie'] ?? <String>[]) {
++        final pair = value.split(';').first;
++        final separator = pair.indexOf('=');
++        if (separator > 0) {
++          _sessionCookies[pair.substring(0, separator).trim()] =
++              pair.substring(separator + 1);
++        }
+       }
+-
+-      // 使用默认的 ttwid cookie（只需要 ttwid 即可获取所有画质）
+-      headers["cookie"] = kDefaultCookie;
+-      return headers;
+-    } catch (e) {
+-      CoreLog.error(e);
+-      if (!(headers["cookie"]?.toString().isNotEmpty ?? false)) {
+-        headers["cookie"] = kDefaultCookie;
++      final token = response.headers.value('x-ms-token');
++      if (token != null && token.isNotEmpty) {
++        _sessionCookies['msToken'] = token;
++      }
++      if (!_sessionCookies.containsKey('ttwid')) {
++        throw Exception('Douyin did not issue a visitor cookie');
+       }
+-      return headers;
++    } catch (_) {
++      _sessionCookies.clear();
++      _sessionInitialization = null;
++      throw Exception('抖音访客会话初始化失败，请稍后重试或配置自己的 ttwid');
++    }
++  }
++
++  Future<T> _withSessionRetry<T>(Future<T> Function() request) async {
++    try {
++      return await request();
++    } catch (_) {
++      if (cookie.isNotEmpty) rethrow;
++      _sessionCookies.clear();
++      _sessionInitialization = null;
++      await Future<void>.delayed(const Duration(milliseconds: 300));
++      return await request();
+     }
+   }
+ 
+   @override
+   Future<List<LiveCategory>> getCategores() async {
++    return _withSessionRetry(_getCategories);
++  }
++
++  Future<List<LiveCategory>> _getCategories() async {
+     List<LiveCategory> categories = [];
+     var result = await HttpClient.instance.getText(
+       "https://live.douyin.com/",
+@@ -122,6 +164,11 @@ class DouyinSite implements LiveSite {
+   Future<LiveCategoryResult> getCategoryRooms(
+     LiveSubCategory category, {
+     int page = 1,
++  }) => _withSessionRetry(() => _getCategoryRooms(category, page: page));
++
++  Future<LiveCategoryResult> _getCategoryRooms(
++    LiveSubCategory category, {
++    int page = 1,
+   }) async {
+     var ids = category.id.split(',');
+     var partitionId = ids[0];
+@@ -182,6 +229,10 @@ class DouyinSite implements LiveSite {
+ 
+   @override
+   Future<LiveCategoryResult> getRecommendRooms({int page = 1}) async {
++    return _withSessionRetry(() => _getRecommendRooms(page: page));
++  }
++
++  Future<LiveCategoryResult> _getRecommendRooms({int page = 1}) async {
+     String serverUrl =
+         "https://live.douyin.com/webcast/web/partition/detail/room/v2/";
+     var uri = Uri.parse(serverUrl).replace(
+@@ -641,6 +692,11 @@ class DouyinSite implements LiveSite {
+   Future<LiveSearchRoomResult> searchRooms(
+     String keyword, {
+     int page = 1,
++  }) => _withSessionRetry(() => _searchRooms(keyword, page: page));
++
++  Future<LiveSearchRoomResult> _searchRooms(
++    String keyword, {
++    int page = 1,
+   }) async {
+     String serverUrl = "https://www.douyin.com/aweme/v1/web/live/search/";
+     var uri = Uri.parse(serverUrl).replace(
+@@ -682,22 +738,8 @@ class DouyinSite implements LiveSite {
+         "webid": "7382872326016435738",
+       },
+     );
+-    //var requlestUrl = await getAbogusUrl(uri.toString());
+-    var requlestUrl = uri.toString();
+-    var headResp = await HttpClient.instance.head(
+-      'https://live.douyin.com',
+-      header: headers,
+-    );
+-    var dyCookie = "";
+-    headResp.headers["set-cookie"]?.forEach((element) {
+-      var cookie = element.split(";")[0];
+-      if (cookie.contains("ttwid")) {
+-        dyCookie += "$cookie;";
+-      }
+-      if (cookie.contains("__ac_nonce")) {
+-        dyCookie += "$cookie;";
+-      }
+-    });
++    final requestHeaders = await getRequestHeaders();
++    var requlestUrl = DouyinSign.getAbogusUrl(uri.toString(), kDefaultUserAgent);
+ 
+     var result = await HttpClient.instance.getJson(
+       requlestUrl,
+@@ -706,7 +748,7 @@ class DouyinSite implements LiveSite {
+         "Authority": 'www.douyin.com',
+         'accept': 'application/json, text/plain, */*',
+         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+-        'cookie': dyCookie,
++        'cookie': requestHeaders['cookie'],
+         'priority': 'u=1, i',
+         'referer':
+             'https://www.douyin.com/search/${Uri.encodeComponent(keyword)}?type=live',
+@@ -723,6 +765,9 @@ class DouyinSite implements LiveSite {
+     if (result == "" || result == 'blocked') {
+       throw Exception("抖音直播搜索被限制，请稍后再试");
+     }
++    if (result is! Map || result['data'] is! List) {
++      throw Exception("抖音直播搜索返回异常，请稍后再试");
++    }
+     var items = <LiveRoomItem>[];
+     for (var item in result["data"] ?? []) {
+       var itemData = json.decode(item["lives"]["rawdata"].toString());
+diff --git a/simple_live_core/test/douyin_session_test.dart b/simple_live_core/test/douyin_session_test.dart
+new file mode 100644
+index 0000000..d6b4409
+--- /dev/null
++++ b/simple_live_core/test/douyin_session_test.dart
+@@ -0,0 +1,77 @@
++import 'package:dio/dio.dart';
++import 'package:simple_live_core/simple_live_core.dart';
++import 'package:simple_live_core/src/common/http_client.dart';
++import 'package:test/test.dart';
++
++void main() {
++  late Dio originalClient;
++  late Dio client;
++  var requests = 0;
++
++  setUp(() {
++    originalClient = HttpClient.instance.dio;
++    client = Dio();
++    HttpClient.instance.dio = client;
++    requests = 0;
++    client.interceptors.add(InterceptorsWrapper(onRequest: (options, handler) {
++      requests++;
++      handler.resolve(Response(
++        requestOptions: options,
++        statusCode: 404,
++        headers: Headers.fromMap({
++          'set-cookie': [
++            'ttwid=fresh-visitor; Path=/; HttpOnly',
++            'UIFID=visitor-id; Path=/',
++          ],
++          'x-ms-token': ['visitor-token'],
++        }),
++      ));
++    }));
++  });
++
++  tearDown(() {
++    HttpClient.instance.dio = originalClient;
++    client.close(force: true);
++  });
++
++  test('concurrent requests share initialization and isolated headers', () async {
++    final site = DouyinSite();
++    final results = await Future.wait([
++      site.getRequestHeaders(),
++      site.getRequestHeaders(),
++    ]);
++    expect(requests, 1);
++    expect(results.first['cookie'], contains('ttwid=fresh-visitor'));
++    expect(results.first['cookie'], contains('msToken=visitor-token'));
++    expect(results.first['cookie'], isNot(contains('HttpOnly')));
++    results.first['Referer'] = 'https://live.douyin.com/12345';
++    expect(results.last['Referer'], DouyinSite.kDefaultReferer);
++    expect((await site.getRequestHeaders())['Referer'],
++        DouyinSite.kDefaultReferer);
++    expect(requests, 1);
++  });
++
++  test('custom cookie is preserved without requesting a visitor session', () async {
++    final site = DouyinSite()..cookie = 'ttwid=custom-visitor';
++    expect((await site.getRequestHeaders())['cookie'], 'ttwid=custom-visitor');
++    expect(requests, 0);
++  });
++
++  test('failed initialization can be retried', () async {
++    client.interceptors.clear();
++    client.interceptors.add(InterceptorsWrapper(onRequest: (options, handler) {
++      requests++;
++      handler.resolve(Response(
++        requestOptions: options,
++        statusCode: 200,
++        headers: Headers.fromMap({
++          if (requests > 1) 'set-cookie': ['ttwid=new-visitor; Path=/'],
++        }),
++      ));
++    }));
++    final site = DouyinSite();
++    await expectLater(site.getRequestHeaders(), throwsException);
++    expect((await site.getRequestHeaders())['cookie'], 'ttwid=new-visitor');
++    expect(requests, 2);
++  });
++}
